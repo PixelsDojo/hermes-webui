@@ -1,0 +1,54 @@
+# Hermes Agent + Hermes WebUI in one container (Railway: one volume at /opt/data).
+# The gateway stays the container's main program; the WebUI is an extra s6 service.
+ARG HERMES_AGENT_IMAGE=nousresearch/hermes-agent:v0.22.5
+FROM ${HERMES_AGENT_IMAGE}
+
+USER root
+
+# ---- WebUI source (read-only for the runtime user) ----
+COPY . /opt/hermes-webui
+ARG HERMES_VERSION=railway-fork
+RUN rm -rf /opt/hermes-webui/.venv /opt/hermes-webui/node_modules /opt/hermes-webui/.git \
+ && echo "__version__ = '${HERMES_VERSION}'" > /opt/hermes-webui/api/_version.py \
+ && chown -R root:root /opt/hermes-webui \
+ && chmod -R a+rX,go-w /opt/hermes-webui
+
+# ---- WebUI Python deps ----
+# The agent venv is sealed. Install only what it lacks into a side dir, built
+# with the same base interpreter the venv was made from (ABI match).
+RUN set -eu; \
+    AGENT_PY=/opt/hermes/.venv/bin/python; \
+    BASE_PY=/usr/local/bin/python3; \
+    [ "$($AGENT_PY -c 'import sys;print(sys.version_info[:2])')" = "$($BASE_PY -c 'import sys;print(sys.version_info[:2])')" ]; \
+    mkdir -p /opt/hermes-webui/.pydeps; \
+    need=""; \
+    "$AGENT_PY" -c 'import yaml' 2>/dev/null || need="$need pyyaml>=6.0"; \
+    "$AGENT_PY" -c 'import cryptography' 2>/dev/null || need="$need cryptography>=42.0"; \
+    if [ -n "$need" ]; then \
+        "$BASE_PY" -m venv /tmp/webui-pip; \
+        /tmp/webui-pip/bin/pip install --no-cache-dir --target /opt/hermes-webui/.pydeps $need; \
+        rm -rf /tmp/webui-pip; \
+    fi; \
+    chmod -R a+rX,go-w /opt/hermes-webui/.pydeps; \
+    PYTHONPATH=/opt/hermes-webui/.pydeps "$AGENT_PY" -c 'import yaml, cryptography; print("webui deps OK")'
+
+# ---- s6 service: hermes-webui ----
+COPY railway/s6/hermes-webui/ /etc/s6-overlay/s6-rc.d/hermes-webui/
+RUN set -eu; \
+    svc=/etc/s6-overlay/s6-rc.d/hermes-webui; \
+    chmod 0755 "$svc/run" "$svc/finish"; chmod 0644 "$svc/type"; \
+    mkdir -p "$svc/dependencies.d"; \
+    touch "$svc/dependencies.d/base" "$svc/dependencies.d/legacy-cont-init"; \
+    touch /etc/s6-overlay/s6-rc.d/user/contents.d/hermes-webui
+
+# WebUI defaults. HERMES_HOME=/opt/data is inherited from the base image.
+ENV HERMES_WEBUI_HOST=0.0.0.0 \
+    HERMES_WEBUI_PORT=8787 \
+    HERMES_WEBUI_STATE_DIR=/opt/data/webui
+
+EXPOSE 8787
+
+# Same as the previous Railway start command: gateway is the main program.
+# No VOLUME line (Railway rejects VOLUME in Dockerfiles; the Railway volume handles /opt/data).
+ENTRYPOINT ["/opt/hermes/docker/entrypoint-dispatch.sh"]
+CMD ["gateway", "run"]

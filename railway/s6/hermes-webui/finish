@@ -1,0 +1,6 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# 125 = "permanently down, don't restart" (same trick as the dashboard service).
+# Used only when run deliberately did not start (disabled or no password).
+[ -e /run/hermes-webui.down ] && exit 125
+exit 0

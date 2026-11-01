@@ -1,0 +1,9 @@
+# Railway config-as-code for the single-container Hermes Agent + WebUI deploy.
+# No secrets here: set API keys, tokens and HERMES_WEBUI_PASSWORD as Railway variables.
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.railway"
+
+[deploy]
+numReplicas = 1
+restartPolicyType = "ON_FAILURE"

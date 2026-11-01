@@ -1,0 +1,36 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Hermes WebUI as an s6 service, modelled on the image's dashboard service.
+MARK=/run/hermes-webui.down
+rm -f "$MARK"
+
+case "${HERMES_WEBUI_ENABLED:-1}" in
+    0|false|FALSE|no|off) touch "$MARK"; exit 0 ;;
+esac
+
+host="${HERMES_WEBUI_HOST:-0.0.0.0}"
+port="${HERMES_WEBUI_PORT:-8787}"
+
+# Fail closed: never expose a non-loopback WebUI without a password.
+if [ "$host" != "127.0.0.1" ] && [ -z "${HERMES_WEBUI_PASSWORD:-}" ] \
+   && [ "${HERMES_WEBUI_ALLOW_NO_ENV_PASSWORD:-0}" != "1" ]; then
+    echo "[hermes-webui] refusing to bind $host without HERMES_WEBUI_PASSWORD" >&2
+    touch "$MARK"; exit 0
+fi
+
+export HOME=/opt/data
+export HERMES_HOME="${HERMES_HOME:-/opt/data}"
+export HERMES_WEBUI_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-/opt/data/webui}"
+export HERMES_WEBUI_DEFAULT_WORKSPACE="${HERMES_WEBUI_DEFAULT_WORKSPACE:-/opt/data/workspace}"
+export HERMES_WEBUI_AGENT_DIR=/opt/hermes
+export HERMES_WEBUI_PYTHON=/opt/hermes/.venv/bin/python
+export HERMES_WEBUI_DISABLE_LOCAL_VENV=1      # never build a second venv
+export HERMES_WEBUI_FOREGROUND=1              # exec server.py; s6 tracks the real PID
+export HERMES_WEBUI_SERVER_CWD="$HERMES_WEBUI_STATE_DIR"   # /opt/hermes is read-only
+export PYTHONPATH="/opt/hermes-webui/.pydeps${PYTHONPATH:+:$PYTHONPATH}"
+
+cd /opt/data || exit 1
+s6-setuidgid hermes mkdir -p "$HERMES_WEBUI_STATE_DIR" "$HERMES_WEBUI_DEFAULT_WORKSPACE"
+
+exec s6-setuidgid hermes /opt/hermes/.venv/bin/python /opt/hermes-webui/bootstrap.py \
+    --foreground --no-browser --skip-agent-install --host "$host" "$port"
